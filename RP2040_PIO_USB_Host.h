@@ -18,12 +18,6 @@
 // Shift works, because it makes 'a' into 'A', but ctrl would not change any
 // characters being sent to Unity, I just have a designated (fake) ctrl ascii code
 
-// TODO -- consider adding logic to ensure there can only be a single PIO_USB_Host object
-//         same for keyboard type. Probably not necessary, ultimately
-
-// TODO -- Unity side to process input, register arrow presses, decide if arrows should have hold logic
-//         hold logic would probably require separate boolean object type
-//         Note: hold logic also potentially needed for enter, backspace, delete, space(?)
 
 // TODO -- figure out how to reset USB host. So far the only device that causes the USB logic to hang
 //         is the black and white keyboard. "Normal" keyboards/keypad/mice/barcode scanners seem to operate normally
@@ -54,10 +48,9 @@ class PIO_USB_Host{
                 }
             }
             pio_cfg.pin_dp = USB_DP_Pin;
-            USBHost.configure_pio_usb(1, &pio_cfg);
-            // TODO - figure out first parameter in above function (rhport?). Relevant to which core is used?
-            // also I think the same parameter in begin function below. Does it work with 0? On either core?
-            USBHost.begin(1);
+            USBHost.configure_pio_usb(0, &pio_cfg);
+            USBHost.begin(0);
+            // note: pretty sure rhport (first parameter in two functions above) is not relevant with a single USB device
         }
 
         void update(){
@@ -144,7 +137,6 @@ class PIO_USB_Keyboard{
         bool capsLockOn = false;
         bool scrollLockOn = false;
         
-        // TODO -- confirm that these use the right modifier codes and that gui is what I think it is (windows key?)
         bool rightAltPressed = false;
         bool leftAltPressed = false;
         bool rightCtrlPressed = false;
@@ -184,6 +176,8 @@ class PIO_USB_Keyboard{
 };
 
 PIO_USB_Keyboard USB_Keyboard;
+
+// actual ascii codes
 #define DELETE_ASCII_CODE 0x7F
 #define ESCAPE_ASCII_CODE 0x1B
 
@@ -200,8 +194,6 @@ const uint8_t F_NUM_KEY_ASCII_CODES[12] = {0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0
 #define PAGE_UP_ASCII_CODE 0x94
 #define PAGE_DOWN_ASCII_CODE 0x95
 
-// these are found within the modifier byte (index 0)
-// TODO -- make sure these codes are right
 #define LEFT_CTRL_ASCII_CODE 0x96
 #define RIGHT_CTRL_ASCII_CODE 0x97
 #define LEFT_ALT_ASCII_CODE 0x98
@@ -209,14 +201,16 @@ const uint8_t F_NUM_KEY_ASCII_CODES[12] = {0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0
 #define LEFT_GUI_ASCII_CODE 0x9A
 #define RIGHT_GUI_ASCII_CODE 0x9B
 
+#define SHIFT_TAB_ASCII_CODE 0x9C
+
 void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
     static uint8_t HID_CodeStates[32];
     uint8_t newHID_CodeStates[32];
     for(int i = 0; i < 32; i++) newHID_CodeStates[i] = 0;
     bool phantomKeyPress;
 
-    // ctrl, alt, and gui keys (sending as actual keys, not modifiers)
-    // ctrp
+    // ctrl, alt, and gui keys (sending as actual key presses with faux ascii codes, not modifiers)
+    // ctrl
     if(USB_Keyboard.ctrlKeysActive && report[0] & KEYBOARD_MODIFIER_LEFTCTRL){
         if(!USB_Keyboard.leftCtrlPressed){
             USB_Keyboard.leftCtrlPressed = true;
@@ -345,10 +339,14 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
                 case HID_KEY_PAGE_UP:
                     if(USB_Keyboard.pageUpKeyActive) USB_Keyboard.addNewByte(PAGE_UP_ASCII_CODE);
                     continue;
+
             }
 
             bool shiftKeyPressed = (KEYBOARD_MODIFIER_LEFTSHIFT & report[0]) || (KEYBOARD_MODIFIER_RIGHTSHIFT & report[0]);
             
+            if(report[i] == HID_KEY_TAB && shiftKeyPressed){
+                USB_Keyboard.addNewByte(SHIFT_TAB_ASCII_CODE);
+            }
             // letters
             if(report[i] >= HID_KEY_A && report[i] <= HID_KEY_Z){
                 bool capitalized = shiftKeyPressed ^ USB_Keyboard.capsLockOn;
@@ -357,7 +355,7 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
                 continue;
             }
 
-            // numbers and characters modified by shift
+            // numbers and characters modified by shift, also tab, enter, backspace, escape, space
             if(report[i] >= HID_KEY_1 && report[i] <= HID_KEY_SLASH){
                 uint8_t newByte = HID_to_ASCII[report[i]][shiftKeyPressed];
                 USB_Keyboard.addNewByte(newByte);
@@ -414,27 +412,17 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
                 USB_Keyboard.addNewByte(F_NUM_KEY_ASCII_CODES[report[i] - HID_KEY_F1]);
                 continue;
             }
-
-            
-
-
-            // TODO -- keypad keys (w/ possibility for numlock logic)
-            // arrow keys, and wall the other faux-ascii keys
-
-            // keypad keys
         }
         
     }
 
     // register key releases. Currently no logic associated w/ release
-    if(!phantomKeyPress){ // don't register release if in error/phantom state
+    if(!phantomKeyPress){ // don't register key presses or releases if in error/phantom state
         for(int i = 0; i < 32; i++) HID_CodeStates[i] &= newHID_CodeStates[i]; 
     }
     
     phantomKeyPress = false;
     
-    uint8_t newByte = 'a';
-    USB_Keyboard.addNewByte(newByte);
     updateKeyboardLEDs();
 }
 
