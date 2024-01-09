@@ -298,7 +298,6 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
         
         bitWrite(newHID_CodeStates[byteIndex], bitIndex, 1);
         if(!bitRead(HID_CodeStates[byteIndex], bitIndex)){ // new key press registered
-            printf("i: %i, byte: %i, bit %i\n", i, byteIndex, bitIndex);
             bitWrite(HID_CodeStates[byteIndex], bitIndex, 1);
 
             switch(report[i]){ // for state changing keys and arrow keys
