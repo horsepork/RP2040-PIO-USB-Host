@@ -7,8 +7,9 @@
 
 // Note: this setup assumes only a single connected USB device
 // (have not attempted multiple, not sure whether we would ever need it)
+// if we do need it, will need to get rid of "singleton" usb_device and add more parameters to the constructor or begin function
 
-// also assuming low speed USB devices, so HID report size should be a max of 8 bytes
+// also assuming low speed USB devices, meaning HID report size should be a max of 8 bytes
 
 // currently only including functionality for a keyboard/keypad
 // Will work out mouse or other device if/when necessary
@@ -65,7 +66,6 @@ class PIO_USB_Host{
             return connected;
         }
 
-        // TODO -- make sure the below syntax is correct?
         void (*receiveHIDReport)(uint8_t const*, uint16_t) = printHIDReport;
 
     private:
@@ -84,28 +84,36 @@ void tuh_mount_cb(uint8_t dev_addr){
     // that is, does it make the USB host ready to receive from USB device?
     tuh_hid_receive_report(dev_addr, 0);
     USB_Device.setConnected(true);
+    Serial.println("mounted");
     // TODO -- confirm that I should be passing dev_addr and 0 to index
 }
 
 void tuh_umount_cb(uint8_t dev_addr){
     USB_Device.setConnected(false);
+    Serial.println("unmounted");
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len) {
   USB_Device.receiveHIDReport(report, len); // callback to be changed as needed for different USB devices
+  tuh_hid_receive_report(dev_addr, 0);
 }
 
 
-// keyboard logic does not include holdIng keys down. Would need a different type
+// keyboard logic does not include holding keys down. Would need a different type
 // for something like a gamepad where pushing right keeps the player moving right, for instance
+
+void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len);
+void updateKeyboardLEDs();
 
 uint8_t const HID_to_ASCII[128][2] =  { HID_KEYCODE_TO_ASCII };
 
 class PIO_USB_Keyboard{
     public:
 
-        void begin(uint8_t USB_DP_Pin){
+        void begin(uint8_t USB_DP_Pin, uint8_t *_data, uint8_t _dataSize){
             USB_Device.begin(USB_DP_Pin);
+            data = _data;
+            dataSize = _dataSize;
             USB_Device.receiveHIDReport = receiveAndProcessKeyboardHIDReport;
         }
 
@@ -119,11 +127,12 @@ class PIO_USB_Keyboard{
         }
 
         void addNewByte(uint8_t newByte){
-            data[0]++; // incrementor byte;
-            data[1] = newByte;
+            data[0]++; // incrementor byte
             for(int i = dataSize - 1; i > 1; i--){
                 data[i] = data[i-1];
             }
+            data[1] = newByte;
+            
             updated = true;
         }
 
@@ -204,10 +213,11 @@ const uint8_t F_NUM_KEY_ASCII_CODES[12] = {0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0
 #define SHIFT_TAB_ASCII_CODE 0x9C
 
 void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
+    // printHIDReport(report, len);
     static uint8_t HID_CodeStates[32];
     uint8_t newHID_CodeStates[32];
     for(int i = 0; i < 32; i++) newHID_CodeStates[i] = 0;
-    bool phantomKeyPress;
+    bool phantomKeyPress = false;
 
     // ctrl, alt, and gui keys (sending as actual key presses with faux ascii codes, not modifiers)
     // ctrl
@@ -273,19 +283,23 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
         USB_Keyboard.rightGuiPressed = false;
     }
 
+    // button releases aren't processing correctly, also keyboard leds dont seem to be turning on
     // cycle through report to check for new key presses
+    
     for(int i = 2; i < 8; i++){
         // TODO -- make sure this is the behavior I want with phantom key press
-        if(i == 0x00) break;
-        if(i == 0x01){
+        if(report[i] == 0x00) break;
+        if(report[i] == 0x01){
             phantomKeyPress = true;
             break;
         }
         uint8_t byteIndex = report[i] / 8;
         uint8_t bitIndex = report[i] % 8;
+        
         bitWrite(newHID_CodeStates[byteIndex], bitIndex, 1);
         if(!bitRead(HID_CodeStates[byteIndex], bitIndex)){ // new key press registered
-            bitWrite(newHID_CodeStates[byteIndex], bitIndex, 1);
+            printf("i: %i, byte: %i, bit %i\n", i, byteIndex, bitIndex);
+            bitWrite(HID_CodeStates[byteIndex], bitIndex, 1);
 
             switch(report[i]){ // for state changing keys and arrow keys
                 case HID_KEY_NUM_LOCK:
