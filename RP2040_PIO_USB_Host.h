@@ -219,7 +219,7 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
     for(int i = 0; i < 32; i++) newHID_CodeStates[i] = 0;
     bool phantomKeyPress = false;
 
-    // ctrl, alt, and gui keys (sending as actual key presses with faux ascii codes, not modifiers)
+    // ctrl, alt, and gui (windows) keys (sending as actual key presses with faux ascii codes, not modifiers)
     // ctrl
     if(USB_Keyboard.ctrlKeysActive && report[0] & KEYBOARD_MODIFIER_LEFTCTRL){
         if(!USB_Keyboard.leftCtrlPressed){
@@ -441,7 +441,7 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
 
 void updateKeyboardLEDs(){
     static uint8_t LEDState = 0;
-    uint8_t newState = USB_Keyboard.numLockOn + USB_Keyboard.capsLockOn << 1 + USB_Keyboard.scrollLockOn << 2;
+    uint8_t newState = USB_Keyboard.numLockOn + (USB_Keyboard.capsLockOn << 1) + (USB_Keyboard.scrollLockOn << 2);
     if(newState == LEDState) return;
     LEDState = newState;
     if(USB_Device.isConnected()){
