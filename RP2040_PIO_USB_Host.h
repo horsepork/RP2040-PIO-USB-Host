@@ -115,13 +115,13 @@ void tuh_mount_cb(uint8_t dev_addr){
     
     printf("%s connected w/ dev_addr %i and index %i\n", itfProtocolStrings[connectedDevices[dev_addr].itfProtocol], dev_addr, connectedDevices[dev_addr].index);
     
-    if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_KEYBOARD){
-        updateKeyboardLEDs(dev_addr);
-    }
-   
     // tuh_descriptor_get_device(dev_addr, &USB_Device.desc_device, 18, print_device_descriptor, 0);
     if(!tuh_hid_receive_report(dev_addr, connectedDevices[dev_addr].index)){
         Serial.println("Error, can't receive hid report?");
+    }
+
+    if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_KEYBOARD){
+        updateKeyboardLEDs(dev_addr);
     }
 }
 
@@ -629,7 +629,7 @@ void receiveAndProcessKeyboardHIDReport(uint8_t dev_addr, uint8_t const *report,
 }
 
 void updateKeyboardLEDs(uint8_t dev_addr){
-    static uint8_t LEDState = 0;
+    static uint8_t LEDState;
     uint8_t newState = USB_Keyboard.numLockOn + (USB_Keyboard.capsLockOn << 1) + (USB_Keyboard.scrollLockOn << 2);
     if(newState == LEDState) return;
     LEDState = newState;
