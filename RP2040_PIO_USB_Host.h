@@ -4,17 +4,12 @@
 #include "Arduino.h"
 #include "pio_usb.h"
 #include "Adafruit_TinyUSB.h"
+#include "LibPrintf.h"
 
-// Note: this setup assumes only a single connected USB device
-// (have not attempted multiple, not sure whether we would ever need it)
-// if we do need it, will need to get rid of "singleton" usb_device and add more parameters to the constructor or begin function
 
-// also assuming low speed USB devices, meaning HID report size should be a max of 8 bytes
+// This is assuming low speed USB devices, meaning HID report size should be a max of 8 bytes
 
-// currently only including functionality for a keyboard/keypad
-// Will work out mouse or other device if/when necessary
-
-// Another limitation is that keyboard combos are not possible with current setup
+// keyboard combos are not possible with current setup
 // (could potentially add an additional leading byte with the latest modifier byte?)
 // Shift works, because it makes 'a' into 'A', but ctrl would not change any
 // characters being sent to Unity, I just have a designated (fake) ctrl ascii code
@@ -22,8 +17,11 @@
 
 // TODO -- figure out how to reset USB host. So far the only device that causes the USB logic to hang
 //         is the black and white keyboard. "Normal" keyboards/keypad/mice/barcode scanners seem to operate normally
+//         cheap mouses seem to do it too
 
-void printHIDReport(uint8_t const *report, uint16_t len){ // will function as default HID report callback
+
+
+void printHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len){
     Serial.print("HIDreport : ");
     for (uint16_t i = 0; i < len; i++) {
         printf("0x%02X ", report[i]);
@@ -31,79 +29,270 @@ void printHIDReport(uint8_t const *report, uint16_t len){ // will function as de
     Serial.println();
 }
 
-enum USB_HID_TYPE_ENUM{ // also the protocol number. Not used at the moment
+void receiveAndProcessMouseHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len);
+void receiveAndProcessKeyboardHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len);
+void updateKeyboardLEDs(uint8_t dev_addr);
+
+enum USB_HID_TYPE_ENUM{
+    HID_TYPE_OTHER,
     HID_TYPE_KEYBOARD = 1,
     HID_TYPE_MOUSE = 2,
-    HID_TYPE_OTHER
 };
+
+const char* itfProtocolStrings[3] = {"other hid device", "keyboard", "mouse"};
+
+struct DeviceStruct{
+    uint8_t index; // or instance
+    USB_HID_TYPE_ENUM itfProtocol = HID_TYPE_OTHER;
+};
+
+DeviceStruct connectedDevices[5]; // index is dev_addr
 
 class PIO_USB_Host{
     public:
-        void begin(uint8_t USB_DP_Pin){ // note that D- pin must be one more than DP
+        void begin(uint8_t USB_DP_Pin, uint8_t _rhport = 0){ // D- pin must be one more than DP
+            
+            if(initialized){
+                if(USB_DP_Pin != pio_cfg.pin_dp){
+                    Serial.println("ERROR! Passed two different D+ pins to same USB device");
+                    return;
+                }
+                return;
+            }
+            rhport = _rhport;
             uint32_t cpu_hz = clock_get_hz(clk_sys);
             if (cpu_hz != 120000000UL && cpu_hz != 240000000UL) {
                 while (1) {
                     printf("Error: CPU Clock = %lu, PIO USB require CPU clock must be multiple of 120 Mhz\r\n", cpu_hz);
                     printf("Change your CPU Clock to either 120 or 240 Mhz\r\n\n");
-                    delay(2000);
+                    delay(5000);
                 }
             }
             pio_cfg.pin_dp = USB_DP_Pin;
-            USBHost.configure_pio_usb(0, &pio_cfg);
-            USBHost.begin(0);
+            // USBHost.configure_pio_usb(_rhport, &pio_cfg);
+            // USBHost.begin(_rhport);
+            tuh_configure(rhport, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
+            tuh_init(rhport);
+            initialized = true;
             // note: pretty sure rhport (first parameter in two functions above) is not relevant with a single USB device
         }
 
         void update(){
-            USBHost.task();
+            tuh_task();
         }
 
-        void setConnected(bool _connected){
-            connected = _connected;
+        void setDebugHID(bool _debugHID){
+            debugHID = _debugHID;
+            if(debugHID) Serial.println("Printing HID reports");
+            else Serial.println("Not printing HID reports");
         }
 
-        bool isConnected(){
-            return connected;
-        }
+        bool debugHID = false;
 
-        void (*receiveHIDReport)(uint8_t const*, uint16_t) = printHIDReport;
-
-    private:
-        Adafruit_USBH_Host USBHost;
+    public:
         tusb_desc_device_t desc_device;
         pio_usb_configuration_t pio_cfg = PIO_USB_DEFAULT_CONFIG;
-        bool connected = false;
-        
+        bool initialized = false;
+        uint8_t rhport;
         
 };
 
 PIO_USB_Host USB_Device;
 
+void print_device_descriptor(tuh_xfer_t* xfer);
+void getProtocol(uint8_t dev_addr);
+
 void tuh_mount_cb(uint8_t dev_addr){
-    // TODO -- confirm that the below function does what I think it does?
-    // that is, does it make the USB host ready to receive from USB device?
-    tuh_hid_receive_report(dev_addr, 0);
-    USB_Device.setConnected(true);
-    Serial.println("mounted");
-    // TODO -- confirm that I should be passing dev_addr and 0 to index
+    
+    for(int i = 0; i < 8; i++){
+        uint8_t _protocol = tuh_hid_interface_protocol(dev_addr, i);
+        if(_protocol != 0){
+            connectedDevices[dev_addr].index = i;
+            connectedDevices[dev_addr].itfProtocol = (USB_HID_TYPE_ENUM)_protocol;
+            break;            
+        }
+    }
+    
+    printf("%s connected w/ dev_addr %i and index %i\n", itfProtocolStrings[connectedDevices[dev_addr].itfProtocol], dev_addr, connectedDevices[dev_addr].index);
+    
+    if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_KEYBOARD){
+        updateKeyboardLEDs(dev_addr);
+    }
+   
+    // tuh_descriptor_get_device(dev_addr, &USB_Device.desc_device, 18, print_device_descriptor, 0);
+    if(!tuh_hid_receive_report(dev_addr, connectedDevices[dev_addr].index)){
+        Serial.println("Error, can't receive hid report?");
+    }
 }
 
 void tuh_umount_cb(uint8_t dev_addr){
-    USB_Device.setConnected(false);
-    Serial.println("unmounted");
+    printf("%s with dev_addr %i unmounted\n", itfProtocolStrings[connectedDevices[dev_addr].itfProtocol], dev_addr);
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const *report, uint16_t len) {
-  USB_Device.receiveHIDReport(report, len); // callback to be changed as needed for different USB devices
-  tuh_hid_receive_report(dev_addr, 0);
+    // printf("dev_addr: %i, instance: %i, len: %i\n", dev_addr, instance, len);
+    if(USB_Device.debugHID){
+        printHIDReport(dev_addr, report, len);
+    }
+    if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_KEYBOARD && len == 8){
+        receiveAndProcessKeyboardHIDReport(dev_addr, report, len);
+    }
+    else if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_MOUSE && (len == 3 || len == 6)){
+        receiveAndProcessMouseHIDReport(dev_addr, report, len);
+    }
+
+    
+    if(!tuh_hid_receive_report(dev_addr, connectedDevices[dev_addr].index)){
+        Serial.println("Error, can't receive hid report?");
+    }
 }
 
 
+void print_device_descriptor(tuh_xfer_t* xfer)
+{
+  if ( XFER_RESULT_SUCCESS != xfer->result )
+  {
+    printf("Failed to get device descriptor\r\n");
+    return;
+  }
+
+  uint8_t const daddr = xfer->daddr;
+
+  printf("Device %u: ID %04x:%04x\r\n", daddr, USB_Device.desc_device.idVendor, USB_Device.desc_device.idProduct);
+  printf("Device Descriptor:\r\n");
+  printf("  bLength             %u\r\n"     , USB_Device.desc_device.bLength);
+  printf("  bDescriptorType     %u\r\n"     , USB_Device.desc_device.bDescriptorType);
+  printf("  bcdUSB              %04x\r\n"   , USB_Device.desc_device.bcdUSB);
+  printf("  bDeviceClass        %u\r\n"     , USB_Device.desc_device.bDeviceClass);
+  printf("  bDeviceSubClass     %u\r\n"     , USB_Device.desc_device.bDeviceSubClass);
+  printf("  bDeviceProtocol     %u\r\n"     , USB_Device.desc_device.bDeviceProtocol);
+  printf("  bMaxPacketSize0     %u\r\n"     , USB_Device.desc_device.bMaxPacketSize0);
+  printf("  idVendor            0x%04x\r\n" , USB_Device.desc_device.idVendor);
+  printf("  idProduct           0x%04x\r\n" , USB_Device.desc_device.idProduct);
+  printf("  bcdDevice           %04x\r\n"   , USB_Device.desc_device.bcdDevice);
+
+  // Get String descriptor using Sync API
+//   uint16_t temp_buf[128];
+
+//   Serial.printf("  iManufacturer       %u     "     , desc_device.iManufacturer);
+//   if (XFER_RESULT_SUCCESS == tuh_descriptor_get_manufacturer_string_sync(daddr, LANGUAGE_ID, temp_buf, sizeof(temp_buf)) )
+//   {
+//     print_utf16(temp_buf, TU_ARRAY_SIZE(temp_buf));
+//   }
+//   Serial.printf("\r\n");
+
+//   Serial.printf("  iProduct            %u     "     , desc_device.iProduct);
+//   if (XFER_RESULT_SUCCESS == tuh_descriptor_get_product_string_sync(daddr, LANGUAGE_ID, temp_buf, sizeof(temp_buf)))
+//   {
+//     print_utf16(temp_buf, TU_ARRAY_SIZE(temp_buf));
+//   }
+//   Serial.printf("\r\n");
+
+//   Serial.printf("  iSerialNumber       %u     "     , desc_device.iSerialNumber);
+//   if (XFER_RESULT_SUCCESS == tuh_descriptor_get_serial_string_sync(daddr, LANGUAGE_ID, temp_buf, sizeof(temp_buf)))
+//   {
+//     print_utf16(temp_buf, TU_ARRAY_SIZE(temp_buf));
+//   }
+//   Serial.printf("\r\n");
+
+//   Serial.printf("  bNumConfigurations  %u\r\n"     , desc_device.bNumConfigurations);
+}
+
+class PIO_USB_MOUSE{ // probably silly to have separate mouse, keyboard, and device classes, but it should be fine for now. Plus, there may be a scenario where we could have multiple usb_devices
+    public:
+        void begin(uint8_t USB_DP_Pin, uint8_t *_data, uint8_t _dataSize, uint16_t _screenWidthInPixels = 1920, uint16_t _screenHeightInPixels = 1080){
+            data = _data;
+            dataSize = _dataSize;
+            screenWidthInPixels = _screenWidthInPixels;
+            screenHeightInPixels = _screenHeightInPixels;
+            xCoordinate = screenWidthInPixels / 2;
+            yCoordinate = screenHeightInPixels / 2;
+            USB_Device.begin(USB_DP_Pin);
+        }
+
+        void updateCursor(uint8_t click, int8_t horizontalMotion, int8_t verticalMotion){
+            if(data == NULL || dataSize == 0) return;
+            verticalMotion *= -1;
+
+            data[0] = click;
+            
+            if(horizontalMotion > 0){
+                xCoordinate = min(xCoordinate + horizontalMotion, screenWidthInPixels);
+            }
+            else{
+                xCoordinate = max(xCoordinate + horizontalMotion, 0);
+            }
+
+            if(verticalMotion > 0){
+                yCoordinate = min(yCoordinate + verticalMotion, screenHeightInPixels);
+            }
+            else{
+                yCoordinate = max(yCoordinate + verticalMotion, 0);
+            }
+            updateCoordinateData();
+        }
+
+        void scroll(int8_t scrollDirection){
+            if(!scrollDirection) return;
+            scrollState = (scrollState + scrollDirection) % 16;
+            data[0] = (data[0] & 0b00001111) + (scrollState << 4);
+        }
+
+        void setCoordinates(uint16_t x, uint16_t y){
+            xCoordinate = x;
+            yCoordinate = y;
+            updateCoordinateData();
+        }
+
+        void updateCoordinateData(){
+            data[1] = xCoordinate & 0xFF;
+            data[2] = xCoordinate >> 8;
+            data[3] = yCoordinate & 0xFF;
+            data[4] = yCoordinate >> 8;
+        }
+
+        void printCoordinates(){
+            printf("x: %i, y: %i\n", xCoordinate, yCoordinate);
+        }
+
+        bool update(){
+            static uint8_t dataAtLastCheck[5];
+            bool updated = false;
+            for(int i = 0; i < 5; i++){
+                if(dataAtLastCheck[i] != data[i]){
+                    dataAtLastCheck[i] = data[i];
+                    updated = true;
+                }
+            }
+            return updated;
+        }
+    
+    private:
+        uint8_t* data = NULL;
+        uint8_t dataSize = 0;
+        uint16_t screenWidthInPixels;
+        uint16_t screenHeightInPixels;
+        int xCoordinate;
+        int yCoordinate;
+        uint8_t scrollState = 0;
+
+};
+
+PIO_USB_MOUSE USB_Mouse;
+
+void receiveAndProcessMouseHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len){
+    if(len == 3){
+        USB_Mouse.updateCursor(report[0], report[1], report[2]);
+    }
+    else if(len == 6){
+        USB_Mouse.updateCursor(report[0], report[1], report[3]);
+        USB_Mouse.scroll(report[5]);
+    }
+}
 // keyboard logic does not include holding keys down. Would need a different type
 // for something like a gamepad where pushing right keeps the player moving right, for instance
 
-void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len);
-void updateKeyboardLEDs();
+
 
 uint8_t const HID_to_ASCII[128][2] =  { HID_KEYCODE_TO_ASCII };
 
@@ -114,7 +303,6 @@ class PIO_USB_Keyboard{
             USB_Device.begin(USB_DP_Pin);
             data = _data;
             dataSize = _dataSize;
-            USB_Device.receiveHIDReport = receiveAndProcessKeyboardHIDReport;
         }
 
         bool update(bool forceUpdate = false){
@@ -127,6 +315,7 @@ class PIO_USB_Keyboard{
         }
 
         void addNewByte(uint8_t newByte){
+            if(data == NULL || dataSize == 0) return;
             data[0]++; // incrementor byte
             for(int i = dataSize - 1; i > 1; i--){
                 data[i] = data[i-1];
@@ -138,7 +327,7 @@ class PIO_USB_Keyboard{
 
     private:
         uint8_t* data;
-        uint8_t dataSize; // length of tracked chars plus one for "incrementing byte" at index 0
+        uint8_t dataSize = 0; // length of tracked chars plus one for "incrementing byte" at index 0
         bool updated = false;
     
     public:
@@ -212,8 +401,8 @@ const uint8_t F_NUM_KEY_ASCII_CODES[12] = {0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0
 
 #define SHIFT_TAB_ASCII_CODE 0x9C
 
-void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
-    // printHIDReport(report, len);
+void receiveAndProcessKeyboardHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len){
+    
     static uint8_t HID_CodeStates[32];
     uint8_t newHID_CodeStates[32];
     for(int i = 0; i < 32; i++) newHID_CodeStates[i] = 0;
@@ -282,12 +471,8 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
     else{
         USB_Keyboard.rightGuiPressed = false;
     }
-
-    // button releases aren't processing correctly, also keyboard leds dont seem to be turning on
-    // cycle through report to check for new key presses
     
     for(int i = 2; i < 8; i++){
-        // TODO -- make sure this is the behavior I want with phantom key press
         if(report[i] == 0x00) break;
         if(report[i] == 0x01){
             phantomKeyPress = true;
@@ -370,7 +555,11 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
 
             // numbers and characters modified by shift, also tab, enter, backspace, escape, space
             if(report[i] >= HID_KEY_1 && report[i] <= HID_KEY_SLASH){
+
                 uint8_t newByte = HID_to_ASCII[report[i]][shiftKeyPressed];
+                if(report[i] == 0x32){ // fixes errant backslash code
+                    newByte = HID_to_ASCII[0x31][shiftKeyPressed];
+                }
                 USB_Keyboard.addNewByte(newByte);
                 continue;
             }
@@ -436,17 +625,16 @@ void receiveAndProcessKeyboardHIDReport(uint8_t const *report, uint16_t len){
     
     phantomKeyPress = false;
     
-    updateKeyboardLEDs();
+    updateKeyboardLEDs(dev_addr);
 }
 
-void updateKeyboardLEDs(){
+void updateKeyboardLEDs(uint8_t dev_addr){
     static uint8_t LEDState = 0;
     uint8_t newState = USB_Keyboard.numLockOn + (USB_Keyboard.capsLockOn << 1) + (USB_Keyboard.scrollLockOn << 2);
     if(newState == LEDState) return;
     LEDState = newState;
-    if(USB_Device.isConnected()){
-        tuh_hid_set_report(1, 0, 0, HID_REPORT_TYPE_OUTPUT, &LEDState, sizeof(LEDState));
-    }
+    tuh_hid_set_report(dev_addr, connectedDevices[dev_addr].index, 0, HID_REPORT_TYPE_OUTPUT, &LEDState, sizeof(LEDState));
+    // tuh_hid_set_report(1, 0, 0, HID_REPORT_TYPE_OUTPUT, &LEDState, sizeof(LEDState));
 }
 
 #endif
