@@ -9,16 +9,13 @@
 
 // This is assuming low speed USB devices, meaning HID report size should be a max of 8 bytes
 
-// keyboard combos are not possible with current setup
-// (could potentially add an additional leading byte with the latest modifier byte?)
-// Shift works, because it makes 'a' into 'A', but ctrl would not change any
-// characters being sent to Unity, I just have a designated (fake) ctrl ascii code
-
+// TODO -- clean up old logic, make it so we can have multiple mouse or keyboard instances instead of a single one declare in this file
 
 // TODO -- figure out how to reset USB host. So far the only device that causes the USB logic to hang
 //         is the black and white keyboard. "Normal" keyboards/keypad/mice/barcode scanners seem to operate normally
 //         cheap mouses seem to do it too
 
+// TODO -- pass pointer to LED bit data to keyboard object so it automatically updates as needed
 
 
 void printHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len){
@@ -109,6 +106,9 @@ void tuh_mount_cb(uint8_t dev_addr){
         if(_protocol != 0){
             connectedDevices[dev_addr].index = i;
             connectedDevices[dev_addr].itfProtocol = (USB_HID_TYPE_ENUM)_protocol;
+            if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_KEYBOARD){
+                USB_Keyboard.setDevAddr(dev_addr);
+            }
             break;            
         }
     }
@@ -121,7 +121,7 @@ void tuh_mount_cb(uint8_t dev_addr){
     }
 
     if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_KEYBOARD){
-        updateKeyboardLEDs(dev_addr);
+        old_updateKeyboardLEDs(dev_addr);
     }
 }
 
@@ -198,7 +198,7 @@ void print_device_descriptor(tuh_xfer_t* xfer)
 //   Serial.printf("  bNumConfigurations  %u\r\n"     , desc_device.bNumConfigurations);
 }
 
-class PIO_USB_MOUSE{ // probably silly to have separate mouse, keyboard, and device classes, but it should be fine for now. Plus, there may be a scenario where we could have multiple usb_devices
+class PIO_USB_Mouse{ 
     public:
         void begin(uint8_t USB_DP_Pin, uint8_t *_data, uint8_t _dataSize, uint16_t _screenWidthInPixels = 1920, uint16_t _screenHeightInPixels = 1080){
             data = _data;
@@ -289,10 +289,6 @@ void receiveAndProcessMouseHIDReport(uint8_t dev_addr, uint8_t const *report, ui
         USB_Mouse.scroll(report[5]);
     }
 }
-// keyboard logic does not include holding keys down. Would need a different type
-// for something like a gamepad where pushing right keeps the player moving right, for instance
-
-
 
 uint8_t const HID_to_ASCII[128][2] =  { HID_KEYCODE_TO_ASCII };
 
@@ -303,6 +299,10 @@ class PIO_USB_Keyboard{
             USB_Device.begin(USB_DP_Pin);
             data = _data;
             dataSize = _dataSize;
+        }
+
+        void setDevAddr(uint8_t _daddr){
+            daddr = _daddr;
         }
 
         bool update(bool forceUpdate = false){
@@ -324,11 +324,22 @@ class PIO_USB_Keyboard{
             
             updated = true;
         }
+        
+        void updateKeyboardLEDs(uint8_t newState) // pass byte containing LED bits
+        {
+            newState &= 0b111;
+            static uint8_t LEDState;
+            if(newState == LEDState) return;
+            LEDState = newState;
+            tuh_hid_set_report(daddr, connectedDevices[daddr].index, 0, HID_REPORT_TYPE_OUTPUT, &LEDState, sizeof(LEDState));
+            // tuh_hid_set_report(1, 0, 0, HID_REPORT_TYPE_OUTPUT, &LEDState, sizeof(LEDState));
+        }
 
     private:
         uint8_t* data;
         uint8_t dataSize = 0; // length of tracked chars plus one for "incrementing byte" at index 0
         bool updated = false;
+        uint8_t daddr;
     
     public:
         bool numLockOn = true;
@@ -400,8 +411,14 @@ const uint8_t F_NUM_KEY_ASCII_CODES[12] = {0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0
 #define RIGHT_GUI_ASCII_CODE 0x9B
 
 #define SHIFT_TAB_ASCII_CODE 0x9C
-
 void receiveAndProcessKeyboardHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len){
+    USB_Keyboard.data[0] = report[0];
+    for(int i = 2; i < 8; i++){
+        USB_Keyboard.data[i-1] = report[i];
+    }
+    USB_Keyboard.updated = true;
+}
+void old_receiveAndProcessKeyboardHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len){
     
     static uint8_t HID_CodeStates[32];
     uint8_t newHID_CodeStates[32];
@@ -625,10 +642,10 @@ void receiveAndProcessKeyboardHIDReport(uint8_t dev_addr, uint8_t const *report,
     
     phantomKeyPress = false;
     
-    updateKeyboardLEDs(dev_addr);
+    old_updateKeyboardLEDs(dev_addr);
 }
 
-void updateKeyboardLEDs(uint8_t dev_addr){
+void old_updateKeyboardLEDs(uint8_t dev_addr){
     static uint8_t LEDState;
     uint8_t newState = USB_Keyboard.numLockOn + (USB_Keyboard.capsLockOn << 1) + (USB_Keyboard.scrollLockOn << 2);
     if(newState == LEDState) return;
