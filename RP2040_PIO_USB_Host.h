@@ -2,18 +2,14 @@
 #define _RP2040_PIO_USB_HOST_
 
 #include "Arduino.h"
-#include "pio_usb.h"
+#include "pio_usb.h" // https://github.com/sekigon-gonnoc/Pico-PIO-USB.git#0.5.3
 #include "Adafruit_TinyUSB.h"
-#include "LibPrintf.h"
+#include "LibPrintf.h" // https://github.com/embeddedartistry/arduino-printf
 
 
 // This is assuming low speed USB devices, meaning HID report size should be a max of 8 bytes
 
 // TODO -- clean up old logic, make it so we can have multiple mouse or keyboard instances instead of a single one declare in this file
-
-// TODO -- figure out how to reset USB host. So far the only device that can cause the USB logic to hang
-//         is the black and white keyboard. "Normal" keyboards/keypad/mice/barcode scanners seem to operate normally
-//         cheap mouses also seem to make it hang
 
 // TODO -- pass pointer to LED bit data to keyboard object so it automatically updates as needed
 
@@ -26,6 +22,9 @@ void printHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len){
     Serial.println();
 }
 
+// NOTE: these two functions automatically assume that incoming HID reports are for the USB_Keyboard and USB_Mouse objects declared in this file
+// You can have more than one keyboard or mouse, but you need to modify the code to handle that
+// each keyboard and mouse will have its own unique dev_addr, so you can use that to differentiate between them
 void receiveAndProcessMouseHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len);
 void receiveAndProcessKeyboardHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len);
 void updateKeyboardLEDs(uint8_t dev_addr);
@@ -43,7 +42,7 @@ struct DeviceStruct{
     USB_HID_TYPE_ENUM itfProtocol = HID_TYPE_OTHER;
 };
 
-DeviceStruct connectedDevices[5]; // index is dev_addr
+DeviceStruct connectedDevices[5]; // index is dev_addr, no idea why I set the size to 5?
 
 class PIO_USB_Host{
     public:
@@ -120,7 +119,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 
 
 
-
+// not really tested
 class PIO_USB_Mouse{ 
     public:
         void begin(uint8_t USB_DP_Pin, uint8_t *_data, uint8_t _dataSize, uint16_t _screenWidthInPixels = 1920, uint16_t _screenHeightInPixels = 1080){
@@ -179,7 +178,6 @@ class PIO_USB_Mouse{
         }
 
         bool update(){
-            static uint8_t dataAtLastCheck[5];
             bool updated = false;
             for(int i = 0; i < 5; i++){
                 if(dataAtLastCheck[i] != data[i]){
@@ -198,6 +196,7 @@ class PIO_USB_Mouse{
         int xCoordinate;
         int yCoordinate;
         uint8_t scrollState = 0;
+        uint8_t dataAtLastCheck[5] = {0, 0, 0, 0, 0};
 
 };
 
@@ -236,7 +235,7 @@ class PIO_USB_Keyboard{
             return false;
         }
         
-        void updateKeyboardLEDs(uint8_t newState) // pass byte containing LED bits
+        void updateKeyboardLEDs(uint8_t newState) // pass byte containing LED bits, only first 3 bits are used
         {
             newState &= 0b111;
             static uint8_t LEDState;
@@ -262,7 +261,6 @@ void receiveAndProcessKeyboardHIDReport(uint8_t dev_addr, uint8_t const *report,
 }
 
 void tuh_mount_cb(uint8_t dev_addr){
-    Serial.println("connected?");
     for(int i = 0; i < 8; i++){
         uint8_t _protocol = tuh_hid_interface_protocol(dev_addr, i);
         if(_protocol != 0){
@@ -280,10 +278,6 @@ void tuh_mount_cb(uint8_t dev_addr){
     // tuh_descriptor_get_device(dev_addr, &USB_Device.desc_device, 18, print_device_descriptor, 0);
     if(!tuh_hid_receive_report(dev_addr, connectedDevices[dev_addr].index)){
         Serial.println("Error, can't receive hid report?");
-    }
-
-    if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_KEYBOARD){
-        // old_updateKeyboardLEDs(dev_addr);
     }
 }
 
@@ -313,32 +307,6 @@ void print_device_descriptor(tuh_xfer_t* xfer)
   printf("  idVendor            0x%04x\r\n" , USB_Device.desc_device.idVendor);
   printf("  idProduct           0x%04x\r\n" , USB_Device.desc_device.idProduct);
   printf("  bcdDevice           %04x\r\n"   , USB_Device.desc_device.bcdDevice);
-
-  // Get String descriptor using Sync API
-//   uint16_t temp_buf[128];
-
-//   Serial.printf("  iManufacturer       %u     "     , desc_device.iManufacturer);
-//   if (XFER_RESULT_SUCCESS == tuh_descriptor_get_manufacturer_string_sync(daddr, LANGUAGE_ID, temp_buf, sizeof(temp_buf)) )
-//   {
-//     print_utf16(temp_buf, TU_ARRAY_SIZE(temp_buf));
-//   }
-//   Serial.printf("\r\n");
-
-//   Serial.printf("  iProduct            %u     "     , desc_device.iProduct);
-//   if (XFER_RESULT_SUCCESS == tuh_descriptor_get_product_string_sync(daddr, LANGUAGE_ID, temp_buf, sizeof(temp_buf)))
-//   {
-//     print_utf16(temp_buf, TU_ARRAY_SIZE(temp_buf));
-//   }
-//   Serial.printf("\r\n");
-
-//   Serial.printf("  iSerialNumber       %u     "     , desc_device.iSerialNumber);
-//   if (XFER_RESULT_SUCCESS == tuh_descriptor_get_serial_string_sync(daddr, LANGUAGE_ID, temp_buf, sizeof(temp_buf)))
-//   {
-//     print_utf16(temp_buf, TU_ARRAY_SIZE(temp_buf));
-//   }
-//   Serial.printf("\r\n");
-
-//   Serial.printf("  bNumConfigurations  %u\r\n"     , desc_device.bNumConfigurations);
 }
 
 #endif
