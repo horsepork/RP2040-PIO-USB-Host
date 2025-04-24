@@ -8,9 +8,6 @@
 // also I want to note that I am using the earle-philhower Arduino core: https://arduino-pico.readthedocs.io
 // so your implementation for using the second core probably looks different
 
-#define PICO_ID "keyboard_anomaly"
-UnityPicoComms comms(PICO_ID);
-
 #define USB_DP_PIN 8 // D- pin must be one more than DP, so must use pin 9 in this case
 bool _keyboardUpdated = false;
 bool _moueUpdated = false;
