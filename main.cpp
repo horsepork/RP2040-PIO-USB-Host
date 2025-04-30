@@ -45,7 +45,8 @@ void setup1(){
     USB_Mouse.begin(USB_DP_PIN, mouseData, MOUSE_DATA_SIZE); // USB_Mouse is declared in RP2040_PIO_USB_Host.h. We pass the array directly
 }
 
-void loop1(){ // USB device loop, must be run on dedicated core
+void loop1(){ // USB device loop, must be run on dedicated core, don't use any other logic here
+  USB_Device.update();
   if(USB_Keyboard.update()){
     _keyboardUpdated = true;
   }

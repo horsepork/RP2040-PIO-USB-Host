@@ -177,7 +177,13 @@ class PIO_USB_Mouse{
             printf("x: %i, y: %i\n", xCoordinate, yCoordinate);
         }
 
+        bool mouseUpdated = false;
+
         bool update(){
+            if(mouseUpdated){
+                mouseUpdated = false;
+                return true;
+            }
             bool updated = false;
             for(int i = 0; i < 5; i++){
                 if(dataAtLastCheck[i] != data[i]){
@@ -203,6 +209,11 @@ class PIO_USB_Mouse{
 PIO_USB_Mouse USB_Mouse;
 
 void receiveAndProcessMouseHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len){
+    USB_Mouse.mouseUpdated = true;
+    USB_Mouse.HID_Data[0] = report[0];
+    for(int i = 1; i < 7; i++){
+        USB_Mouse.HID_Data[i] = report[i+1];
+    }
     if(len == 3){
         USB_Mouse.updateCursor(report[0], report[1], report[2]);
     }
@@ -226,8 +237,7 @@ class PIO_USB_Keyboard{
             daddr = _daddr;
         }
 
-        bool update(){
-            USB_Device.update();
+        bool update(){ // somewhat redundant, but this is how the USB_Mouse class is set up
             if(updated){
                 updated = false;
                 return true;
