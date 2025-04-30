@@ -3,14 +3,14 @@
 
 // look at https://wiki.osdev.org/USB_Human_Interface_Devices for HID report format for both keyboard and mouse
 
-// does not contain exmaple for setting keyboard leds, look at RP2040_PIO_USB_Host.h. Pretty self explanatory
+// does not contain example for setting keyboard leds, look at RP2040_PIO_USB_Host.h. Pretty self explanatory
 
 // also I want to note that I am using the earle-philhower Arduino core: https://arduino-pico.readthedocs.io
 // so your implementation for using the second core probably looks different
 
 #define USB_DP_PIN 8 // D- pin must be one more than DP, so must use pin 9 in this case
 bool _keyboardUpdated = false;
-bool _moueUpdated = false;
+bool _mouseUpdated = false;
 
 #define MOUSE_DATA_SIZE 5
 uint8_t mouseData[MOUSE_DATA_SIZE];
@@ -31,18 +31,18 @@ void loop(){
         // look at receiveAndProcessKeyboardHIDReport() function to change this
         _keyboardUpdated = false;
     }
-    if(_moueUpdated){
+    if(_mouseUpdated){
       printMouseHID();
       // do whatever you want to do with the mouse data here
       // data accessible via USB_Mouse.data[] array, size is 5 bytes (or mouseData, not sure why I set it up this way?)
       // more some helper functions are in the PIO_USB_Mouse class
-      
+      _mouseUpdated = false;  // Reset flag
     }
 }
 
 void setup1(){
     USB_Keyboard.begin(USB_DP_PIN); // USB_Keyboard is declared in RP2040_PIO_USB_Host.h
-    USB_Mouse.begin(USB_DP_PIN, &mouseData, MOUSE_DATA_SIZE); // USB_Mouse is declared in RP2040_PIO_USB_Host.h
+    USB_Mouse.begin(USB_DP_PIN, mouseData, MOUSE_DATA_SIZE); // USB_Mouse is declared in RP2040_PIO_USB_Host.h. We pass the array directly
 }
 
 void loop1(){ // USB device loop, must be run on dedicated core
@@ -50,7 +50,7 @@ void loop1(){ // USB device loop, must be run on dedicated core
     _keyboardUpdated = true;
   }
   if(USB_Mouse.update()){
-    _moueUpdated = true;
+    _mouseUpdated = true;
   }
 
 }
@@ -67,7 +67,7 @@ void printKeyboardHID(){
 void printMouseHID(){
   Serial.print("Mouse HID report: ");
   for (uint16_t i = 0; i < MOUSE_DATA_SIZE; i++) {
-      printf("0x%02X ", USB_Mouse.HID_Data[i]);
+      printf("0x%02X ", mouseData[i]);  // Use mouseData instead of USB_Mouse.HID_Data
   }
   Serial.println();
 }
