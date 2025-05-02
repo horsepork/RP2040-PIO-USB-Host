@@ -58,7 +58,7 @@ void loop1(){ // USB device loop, must be run on dedicated core, don't use any o
 
 
 void printKeyboardHID(){
-    Serial.print("Keyboard HID report: ");
+    Serial.print("Keyboard HID report: "); // sans empty second byte
     for (uint16_t i = 0; i < 7; i++) {
         printf("0x%02X ", USB_Keyboard.HID_Data[i]);
     }
@@ -67,8 +67,8 @@ void printKeyboardHID(){
 
 void printMouseHID(){
   Serial.print("Mouse HID report: ");
-  for (uint16_t i = 0; i < MOUSE_DATA_SIZE; i++) {
-      printf("0x%02X ", mouseData[i]);  // Use mouseData instead of USB_Mouse.HID_Data
+  for (uint16_t i = 0; i < USB_Mouse.reportLength; i++) {
+      printf("0x%02X ", USB_Mouse.HID_Data[i]);
   }
   Serial.println();
 }

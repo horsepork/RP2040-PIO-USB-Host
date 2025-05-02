@@ -178,6 +178,7 @@ class PIO_USB_Mouse{
         }
 
         bool mouseUpdated = false;
+        int reportLength = 0;
 
         bool update(){
             if(mouseUpdated){
@@ -210,10 +211,11 @@ PIO_USB_Mouse USB_Mouse;
 
 void receiveAndProcessMouseHIDReport(uint8_t dev_addr, uint8_t const *report, uint16_t len){
     USB_Mouse.mouseUpdated = true;
-    USB_Mouse.HID_Data[0] = report[0];
-    for(int i = 1; i < 7; i++){
+    USB_Mouse.reportLength = len;
+    for(int i = 0; i < len; i++){
         USB_Mouse.HID_Data[i] = report[i+1];
     }
+    // the below may be wrong
     if(len == 3){
         USB_Mouse.updateCursor(report[0], report[1], report[2]);
     }
@@ -227,7 +229,7 @@ uint8_t const HID_to_ASCII[128][2] =  { HID_KEYCODE_TO_ASCII };
 
 class PIO_USB_Keyboard{
     public:
-        uint8_t HID_Data[7]; // discard second (empty) byte
+        uint8_t HID_Data[7]; 
         bool updated = false;
         void begin(uint8_t USB_DP_Pin){
             USB_Device.begin(USB_DP_Pin);
