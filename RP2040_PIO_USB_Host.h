@@ -107,7 +107,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
     if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_KEYBOARD && len == 8){
         receiveAndProcessKeyboardHIDReport(dev_addr, report, len);
     }
-    else if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_MOUSE && (len == 3 || len == 6)){
+    else if(connectedDevices[dev_addr].itfProtocol == HID_TYPE_MOUSE){
         receiveAndProcessMouseHIDReport(dev_addr, report, len);
     }
 
